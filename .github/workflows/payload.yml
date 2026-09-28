@@ -1,0 +1,54 @@
+name: payload
+
+on:
+  push:
+    tags: ['payload-*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build brom-payload (Debian 12, gcc-arm-none-eabi)
+        run: |
+          docker run --rm -v "$PWD":/src -w /src/brom-payload debian:12-slim bash -c '
+            set -eu
+            apt-get update -q
+            apt-get install -y -q --no-install-recommends \
+              make gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi
+            make clean
+            make
+          '
+          cp brom-payload/build/payload.bin payload.bin
+          sha256sum payload.bin | tee payload.bin.sha256
+
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: payload.bin
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(cut -d' ' -f1 payload.bin.sha256)
+          gh release create "$GITHUB_REF_NAME" payload.bin \
+            -R "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "biscuit bootrom payload (Windows VCOM fix)" \
+            --notes "Bootrom payload for the biscuit (MT8163) amonet exploit, patched so the bootrom step completes on Windows.
+
+          Built by GitHub Actions from commit \`$GITHUB_SHA\` in a pinned Debian 12 container.
+
+          \`payload.bin\` sha256:
+          \`$sha\`
+
+          Verify build provenance:
+          \`gh attestation verify payload.bin -R $GITHUB_REPOSITORY\`"
